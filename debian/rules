@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- -DCMAKE_BUILD_TYPE=Release
+
+override_dh_auto_install:
+	dh_auto_install
+	install -D -m 644 debian/lib-secret-manager.desktop \
+		debian/lib-secret-manager/usr/share/applications/lib-secret-manager.desktop
+	install -D -m 644 resources/lib-secret-manager.svg \
+		debian/lib-secret-manager/usr/share/icons/hicolor/scalable/apps/lib-secret-manager.svg
+	install -D -m 644 debian/lib-secret-manager.metainfo.xml \
+		debian/lib-secret-manager/usr/share/metainfo/lib-secret-manager.metainfo.xml

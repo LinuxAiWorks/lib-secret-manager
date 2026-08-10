@@ -1,0 +1,33 @@
+# Build
+build*/
+obj-*/
+cmake-build-*/
+*.user
+*.autosave
+
+# Debian
+debian/lib-secret-manager/
+debian/tmp/
+debian/.debhelper/
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/debhelper-build-stamp
+*.deb
+*.changes
+*.buildinfo
+
+# Qt
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+*.qm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store

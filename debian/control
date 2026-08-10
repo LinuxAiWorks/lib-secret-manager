@@ -1,0 +1,28 @@
+Source: lib-secret-manager
+Section: utils
+Priority: optional
+Maintainer: Dmitry Kh <admin@linuxaiworks.ru>
+Build-Depends: debhelper (>= 13),
+               cmake (>= 3.16),
+               qt6-base-dev,
+               libqt6svg6-dev,
+               libdtk6widget-dev,
+               libdtk6core-dev,
+               libsecret-1-dev,
+               libglib2.0-dev,
+               pkg-config
+Standards-Version: 4.6.0
+Homepage: https://github.com/linuxaiworks/lib-secret-manager
+
+Package: lib-secret-manager
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         libqt6svg6,
+         libdtk6widget,
+         libdtk6core,
+         libdtk6gui,
+         libsecret-1-0
+Description: Password manager for Linux via libsecret
+ A simple and secure password manager for Linux.
+ Manage your secrets stored in the system keyring via libsecret.

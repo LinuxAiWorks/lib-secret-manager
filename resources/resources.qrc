@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file>lib-secret-manager.svg</file>
+    </qresource>
+</RCC>
