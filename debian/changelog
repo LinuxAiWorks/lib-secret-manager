@@ -1,3 +1,22 @@
+lib-secret-manager (1.0.3-1) stable; urgency=medium
+
+  * Security & Performance:
+    - Implemented lazy loading for secrets: passwords are decrypted only on demand,
+      significantly reducing memory usage and startup time.
+    - Fixed memory leak in SecretWorker (proper GValue unref).
+    - Added automatic clipboard clearing 30 seconds after copying a password.
+  * User Experience:
+    - Removed "Password" column from the main table for better security and cleaner UI.
+    - Added built-in secure password generator in the "Add Secret" dialog.
+    - Replaced text "Copy" button with an icon inside the password field in details view.
+    - Switched to DPasswordEdit for password inputs (eye icon visibility toggle).
+    - Added real-time validation: "Save" button is disabled if required fields are empty.
+  * Build System:
+    - Improved CMake logic for embedding DTK translations.
+    - Added detailed code documentation for production readiness.
+
+ -- Dmitry Kh <admin@linuxaiworks.ru>  Mon, 10 Aug 2026 14:30:00 +0800
+
 lib-secret-manager (1.0.0-1) stable; urgency=medium
 
   * Initial release.

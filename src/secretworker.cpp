@@ -1,6 +1,12 @@
 #include "secretworker.h"
 #include <QDebug>
 
+/**
+ * @brief Определение схемы атрибутов для libsecret.
+ * 
+ * Используем SECRET_SCHEMA_NONE для совместимости, но задаем уникальное имя.
+ * Атрибуты позволяют искать секреты по метке, юзернейму и сервису.
+ */
 static const SecretSchema *my_schema(void) {
     static const SecretSchema schema = {
         "com.example.LibSecretManager", SECRET_SCHEMA_NONE,
@@ -17,10 +23,12 @@ static const SecretSchema *my_schema(void) {
 SecretWorker::SecretWorker(QObject *parent) : QObject(parent) {}
 
 SecretWorker::~SecretWorker() {
-    // Освобождение контекста перенесено в cleanup()
+    // Ресурсы освобождаются в cleanup(), который вызывается явно из деструктора MainWindow
 }
 
 void SecretWorker::init() {
+    // Создаем и активируем отдельный контекст GLib для этого потока.
+    // Это критически важно для работы sync-функций libsecret внутри QThread.
     m_glibContext = g_main_context_new();
     g_main_context_push_thread_default(m_glibContext);
 }
@@ -36,9 +44,11 @@ void SecretWorker::cleanup() {
 void SecretWorker::storeItem(const QString &label, const QString &username,
                              const QString &service, const QString &password) {
     GError *error = nullptr;
+    
+    // Синхронная запись в keyring. Блокирует только этот поток.
     gboolean ok = secret_password_store_sync(
         my_schema(),
-        SECRET_COLLECTION_DEFAULT,
+        SECRET_COLLECTION_DEFAULT, // Используем коллекцию по умолчанию (Login)
         label.toUtf8().constData(),
         password.toUtf8().constData(),
         nullptr, &error,
@@ -49,6 +59,7 @@ void SecretWorker::storeItem(const QString &label, const QString &username,
     );
 
     if (error) {
+        qWarning() << "SecretWorker: Store failed:" << error->message;
         Q_EMIT itemStored(false, QString::fromUtf8(error->message));
         g_error_free(error);
     } else {
@@ -58,6 +69,8 @@ void SecretWorker::storeItem(const QString &label, const QString &username,
 
 void SecretWorker::deleteItemByPath(const QString &objectPath) {
     GError *error = nullptr;
+    
+    // 1. Получаем подключение к сервису секретов
     SecretService *service = secret_service_get_sync(SECRET_SERVICE_NONE, nullptr, &error);
     if (error) {
         Q_EMIT itemDeleted(false, QString::fromUtf8(error->message));
@@ -65,12 +78,9 @@ void SecretWorker::deleteItemByPath(const QString &objectPath) {
         return;
     }
 
+    // 2. Получаем коллекцию по умолчанию
     SecretCollection *collection = secret_collection_for_alias_sync(
-        service,
-        SECRET_COLLECTION_DEFAULT,
-        SECRET_COLLECTION_LOAD_ITEMS,
-        nullptr, &error
-    );
+        service, SECRET_COLLECTION_DEFAULT, SECRET_COLLECTION_LOAD_ITEMS, nullptr, &error);
 
     if (error) {
         Q_EMIT itemDeleted(false, QString::fromUtf8(error->message));
@@ -79,6 +89,7 @@ void SecretWorker::deleteItemByPath(const QString &objectPath) {
         return;
     }
 
+    // 3. Ищем элемент по objectPath
     GList *items = secret_collection_get_items(collection);
     SecretItem *itemToDelete = nullptr;
 
@@ -99,6 +110,7 @@ void SecretWorker::deleteItemByPath(const QString &objectPath) {
         return;
     }
 
+    // 4. Удаляем
     gboolean ok = secret_item_delete_sync(itemToDelete, nullptr, &error);
     if (error) {
         Q_EMIT itemDeleted(false, QString::fromUtf8(error->message));
@@ -107,6 +119,7 @@ void SecretWorker::deleteItemByPath(const QString &objectPath) {
         Q_EMIT itemDeleted(ok, QString());
     }
 
+    // 5. Очистка памяти GLib
     g_list_free(items);
     g_object_unref(collection);
     g_object_unref(service);
@@ -122,11 +135,8 @@ void SecretWorker::listItems() {
     }
 
     SecretCollection *collection = secret_collection_for_alias_sync(
-        service,
-        SECRET_COLLECTION_DEFAULT,
-        SECRET_COLLECTION_LOAD_ITEMS,
-        nullptr, &error
-    );
+        service, SECRET_COLLECTION_DEFAULT, SECRET_COLLECTION_LOAD_ITEMS, nullptr, &error);
+
     if (error) {
         Q_EMIT itemsListed({}, QString::fromUtf8(error->message));
         g_error_free(error);
@@ -146,12 +156,15 @@ void SecretWorker::listItems() {
         data.label = lbl ? QString::fromUtf8(lbl) : QStringLiteral("(no label)");
         data.objectPath = QString::fromUtf8(g_dbus_proxy_get_object_path(G_DBUS_PROXY(item)));
 
+        // Читаем атрибуты (метаданные)
         GHashTable *attrs = secret_item_get_attributes(item);
         if (attrs) {
+            // Пытаемся найти имя пользователя под разными ключами
             const gchar *u = static_cast<const gchar*>(g_hash_table_lookup(attrs, "username"));
             if (!u) u = static_cast<const gchar*>(g_hash_table_lookup(attrs, "user"));
             if (!u) u = static_cast<const gchar*>(g_hash_table_lookup(attrs, "account"));
 
+            // Пытаемся найти сервис
             const gchar *s = static_cast<const gchar*>(g_hash_table_lookup(attrs, "service"));
             if (!s) s = static_cast<const gchar*>(g_hash_table_lookup(attrs, "application"));
             if (!s) s = static_cast<const gchar*>(g_hash_table_lookup(attrs, "server"));
@@ -160,36 +173,70 @@ void SecretWorker::listItems() {
             data.service  = s ? QString::fromUtf8(s) : QString();
         }
 
-        SecretValue *value = secret_item_get_secret(item);
-        bool needUnrefValue = false;
-
-        if (!value) {
-            GError *loadError = nullptr;
-            secret_item_load_secret_sync(item, nullptr, &loadError);
-            if (loadError) {
-                g_error_free(loadError);
-            } else {
-                value = secret_item_get_secret(item);
-                needUnrefValue = true;
-            }
-        }
-
-        if (value) {
-            const gchar *text = secret_value_get_text(value);
-            if (text) {
-                data.password = QString::fromUtf8(text);
-            }
-            if (needUnrefValue) {
-                secret_value_unref(value);
-            }
-        }
-
+        // ЛЕНИВАЯ ЗАГРУЗКА: Мы НЕ вызываем secret_item_get_secret здесь.
+        // Пароль остается пустым. Это экономит память и повышает безопасность.
+        data.password = QString();
+        
         result.append(data);
     }
 
     g_list_free(items);
     g_object_unref(collection);
     g_object_unref(service);
-
     Q_EMIT itemsListed(result, QString());
+}
+
+void SecretWorker::loadSecret(const QString &objectPath) {
+    GError *error = nullptr;
+    SecretService *service = secret_service_get_sync(SECRET_SERVICE_NONE, nullptr, &error);
+    if (error) {
+        Q_EMIT secretLoaded(objectPath, {}, QString::fromUtf8(error->message));
+        g_error_free(error);
+        return;
+    }
+
+    SecretCollection *collection = secret_collection_for_alias_sync(
+        service, SECRET_COLLECTION_DEFAULT, SECRET_COLLECTION_LOAD_ITEMS, nullptr, &error);
+
+    QString password;
+    QString errorMsg;
+
+    if (!error && collection) {
+        GList *items = secret_collection_get_items(collection);
+        for (GList *l = items; l != nullptr; l = l->next) {
+            SecretItem *item = SECRET_ITEM(l->data);
+            const gchar *path = g_dbus_proxy_get_object_path(G_DBUS_PROXY(item));
+            
+            // Нашли нужный элемент
+            if (path && objectPath == QString::fromUtf8(path)) {
+                // Если секрет не закэширован, загружаем его явно
+                if (!secret_item_get_secret(item)) {
+                    GError *loadErr = nullptr;
+                    secret_item_load_secret_sync(item, nullptr, &loadErr);
+                    if (loadErr) {
+                        errorMsg = QString::fromUtf8(loadErr->message);
+                        g_error_free(loadErr);
+                    }
+                }
+
+                SecretValue *value = secret_item_get_secret(item);
+                if (value) {
+                    const gchar *text = secret_value_get_text(value);
+                    if (text) password = QString::fromUtf8(text);
+                    
+                    // КРИТИЧНО: Всегда освобождаем SecretValue, чтобы не было утечек
+                    secret_value_unref(value); 
+                }
+                break;
+            }
+        }
+        g_list_free(items);
+        g_object_unref(collection);
+    } else if (error) {
+        errorMsg = QString::fromUtf8(error->message);
+        g_error_free(error);
+    }
+
+    if (service) g_object_unref(service);
+    Q_EMIT secretLoaded(objectPath, password, errorMsg);
 }
